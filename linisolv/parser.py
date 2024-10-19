@@ -1,8 +1,7 @@
 import io
 import itertools
 import re
-import numpy as np
-from .linsolv import LinearCircuitSolver, Component, Resistor, VoltageSource, CurrentSource
+from .linsolv import *
 
 component_token_to_type:dict[str, type[Component]] = {"R":Resistor, "V":VoltageSource, "I":CurrentSource}
 comp_def_pattern = re.compile(r"(?P<comp_type>[RVI]) +(?P<comp_name>[\w\d]+){(?P<comp_params>([\w\d]+=[+-]?\d+(.\d*)?,? ?)*)}")
