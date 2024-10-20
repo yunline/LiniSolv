@@ -127,12 +127,37 @@ class Component:
     def __pos__(self):
         return self.positive_terminal
 
+class Source(Component):
+    pass
+
 class Resistor(Component):
     _params = ("i", "v", "r")
     r: float|UnknownVarible
-    
-class Source(Component):
-    pass
+    def autocomplete(self) -> None:
+        def check_unknown(param_name:str) -> bool:
+            param=getattr(self, param_name)
+            if not isinstance(param, UnknownVarible):
+                return True
+            elif param.value is not None:
+                return True
+            return False
+        def get_value(param_name) -> float:
+            param=getattr(self, param_name)
+            if isinstance(param, UnknownVarible):
+                assert param.value is not None
+                return param.value
+            return param
+        condition = sum(check_unknown(name) for name in self._params)
+        if condition<2:
+            raise RuntimeError("Too much unknowns, resistor autocompletion failed")
+        if condition==3:
+            return
+        if not check_unknown('v'):
+            self.v.value = get_value('i')*get_value('r') # type: ignore
+        elif not check_unknown('i'):
+            self.i.value = get_value('v')/get_value('r') # type: ignore
+        else:
+            self.r.value = get_value('v')/get_value('i') # type: ignore
 
 class LinearCircuitSolver:
     components: list[Component]
@@ -271,7 +296,6 @@ class LinearCircuitSolver:
                         not isinstance(comp.v, UnknownVarible)):
                         eq.add_unknown(comp.r.get_reciprocal(), line[comp_ind]*comp.v)
                     else:
-                        raise RuntimeError("我不会，长大后再学习")
                         eq.add_unknown(comp.i, line[comp_ind])
         # get KVL equations
         for line in self.kvl_mat:
@@ -296,7 +320,6 @@ class LinearCircuitSolver:
                         not isinstance(comp.i, UnknownVarible)):
                         eq.add_unknown(comp.r, comp.i*line[comp_ind])
                     else:
-                        raise RuntimeError("我不会，长大后再学习")
                         eq.add_unknown(comp.v, line[comp_ind])
         # get Ohm's Law qeuations
         for comp in self.components:
@@ -325,14 +348,14 @@ class LinearCircuitSolver:
                         eq.add_unknown(comp.v, -1) # type: ignore
                         eq.add_unknown(comp.r, comp.i) # type: ignore
                     elif not isinstance(comp.v, UnknownVarible):
-                        raise RuntimeError("我不会，长大后再学习")
+                        pass # in this case Ohm's equation is not needed
                 elif condition==3:
-                    raise RuntimeError("我不会，长大后再学习")
+                    pass # in this case Ohm's equation is not needed
                 if len(eq.unknowns)!=0:
                     equations.append(eq)
 
         self.equations = equations
-    
+
     def solve(self) -> None:
         self._generate_equations()
         # get all unknowns
@@ -341,19 +364,28 @@ class LinearCircuitSolver:
             for unk in eq.unknowns:
                 unknowns_set.add(unk)
         unknowns = list(unknowns_set)
-        # reset the value of unknowns
+        # reset the value of unknowns and mark the index
         for ind,unk in enumerate(unknowns):
             unk.value=None
+            if unk.reciprocal:
+                unk.get_reciprocal().value=None
             unk.mat_index = ind
+        # build the solver mat
         solver_mat = np.zeros((len(self.equations),len(unknowns)+1),dtype=np.float64)
         for line,eq in enumerate(self.equations):
             solver_mat[line,-1] = -eq.const_term
             for unk,coeff in zip(eq.unknowns, eq.coefficients):
                 solver_mat[line, unk.mat_index] = coeff
         solver_mat = remove_linear_dependence(solver_mat)
+        # solve
         result = np.linalg.solve(solver_mat[:,:-1], solver_mat[:,-1])
         for res,unk in zip(result, unknowns):
             unk.value = res
+            if unk.reciprocal:
+                unk.get_reciprocal().value=1/res
+        for unk in unknowns:
+            if isinstance(unk.component,Resistor):
+                unk.component.autocomplete()
 
 def remove_linear_dependence(mat:npt.NDArray[np.float64])->npt.NDArray[np.float64]:
     cnt = 0
