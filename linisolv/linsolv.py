@@ -229,9 +229,9 @@ class LinearCircuitSolver:
                 stack.pop()
                 continue
             connecting_line = self._jump_mat[tos.line, tos.column]
-            if len(stack)>=3:
+            if len(stack)>=2:
                 continue_ = False
-                for ele_index,ele in enumerate(stack[:-2]):
+                for ele_index,ele in enumerate(stack[:-1]):
                     if ele.line==connecting_line: # found a loop
                         add_loop(stack[ele_index:])
                         continue_ = True
