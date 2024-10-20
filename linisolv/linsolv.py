@@ -44,7 +44,7 @@ class UnknownVarible:
     
     def get_expr(self) -> str:
         if self.reciprocal:
-            return f"1/{self.get_reciprocal()}"
+            return f"1/{self.get_reciprocal().get_expr()}"
         else:
             return f"{self.param_name.upper()}{self.component.name}"
 
@@ -69,21 +69,25 @@ class Equation:
         terms = []
         for unk,coff in zip(self.unknowns,self.coefficients):
             if coff==1.0:
-                coff_str = '+'
+                coff_str = ' + '
             elif coff==-1.0:
-                coff_str = '-'
+                coff_str = ' - '
             elif coff<0:
-                coff_str = f"{coff:.2f}*"
+                coff_str = f" - {-coff:.2f}*"
             else:
-                coff_str = f"+{coff:.2f}*"
+                coff_str = f" + {coff:.2f}*"
             terms.append(f'{coff_str}{unk.get_expr()}')
-        s = " ".join(terms)
-        if s[0]=="+":
-            s = s[1:]
+        s = "".join(terms)
+        if s=="":
+            s="0.00"
+        if s.startswith(" + "):
+            s = s[3:]
+        elif s.startswith(" - "):
+            s = "-"+s[3:]
         return s+f" = {-self.const_term:.2f}"
 
 class Component:
-    name: str
+    name: str|None
     mat_index: int
 
     _params: tuple[str, ...] = ("i", "v")
@@ -99,10 +103,7 @@ class Component:
             self.component=component
 
     def __init__(self, name:str|None=None, **params):
-        if name is not None:
-            self.name = name
-        else:
-            self.name = f"{self.__class__.__name__}{id(self)}"
+        self.name = name
         self._parse_param(params)
         self.positive_terminal = self.Terminal(self, +1)
         self.negative_terminal = self.Terminal(self, -1)
@@ -117,7 +118,8 @@ class Component:
     
     def __repr__(self):
         l = [f"{name}={getattr(self,name)}" for name in self._params]
-        return f"{self.__class__.__name__}({', '.join(l)})"
+        name = f"{self.name}, " if self.name is not None else ''
+        return f"{self.__class__.__name__}({name}{', '.join(l)})"
     
     def __neg__(self):
         return self.negative_terminal
