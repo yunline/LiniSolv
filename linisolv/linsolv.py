@@ -4,8 +4,7 @@ import numpy.typing as npt
 __all__ = [
     "Component",
     "Resistor",
-    "VoltageSource",
-    "CurrentSource",
+    "Source",
     "LinearCircuitSolver"
 ]
 
@@ -86,8 +85,8 @@ class Equation:
 class Component:
     name: str
     mat_index: int
-    _params: list
 
+    _params: tuple[str, ...] = ("i", "v")
     i: float|UnknownVarible
     v: float|UnknownVarible
 
@@ -108,9 +107,6 @@ class Component:
         self.positive_terminal = self.Terminal(self, +1)
         self.negative_terminal = self.Terminal(self, -1)
     
-    def __init_subclass__(cls, params:list[str]) -> None:
-        cls._params = params
-    
     def _parse_param(self, params:dict[str,float]):
         for name in self._params:
             param = params.get(name, UnknownVarible(self, name))
@@ -129,13 +125,11 @@ class Component:
     def __pos__(self):
         return self.positive_terminal
 
-class Resistor(Component, params=["r","i","v"]):
+class Resistor(Component):
+    _params = ("i", "v", "r")
     r: float|UnknownVarible
     
-class VoltageSource(Component, params=["i","v"]):
-    pass
-
-class CurrentSource(Component, params=["i","v"]):
+class Source(Component):
     pass
 
 class LinearCircuitSolver:
@@ -262,7 +256,7 @@ class LinearCircuitSolver:
                 if not isinstance(comp.i, UnknownVarible):
                     eq.add_const(comp.i*line[comp_ind])
                     continue
-                if isinstance(comp, VoltageSource):
+                if isinstance(comp, Source):
                     eq.add_unknown(comp.i, line[comp_ind])
                 elif isinstance(comp, Resistor):
                     if (not isinstance(comp.r, UnknownVarible) and
@@ -287,7 +281,7 @@ class LinearCircuitSolver:
                 if not isinstance(comp.v, UnknownVarible):
                     eq.add_const(comp.v*line[comp_ind])
                     continue
-                if isinstance(comp, VoltageSource):
+                if isinstance(comp, Source):
                     eq.add_unknown(comp.v, line[comp_ind])
                 elif isinstance(comp, Resistor):
                     if (not isinstance(comp.r, UnknownVarible) and

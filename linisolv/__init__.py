@@ -4,8 +4,7 @@ from .parser import parse_circuit
 __all__ = [
     "Component",
     "Resistor",
-    "VoltageSource",
-    "CurrentSource",
+    "Source",
     "LinearCircuitSolver",
     "parse_circuit",
 ]

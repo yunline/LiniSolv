@@ -3,7 +3,7 @@ import itertools
 import re
 from .linsolv import *
 
-component_token_to_type:dict[str, type[Component]] = {"R":Resistor, "V":VoltageSource, "I":CurrentSource}
+component_token_to_type:dict[str, type[Component]] = {"R":Resistor, "S":Source}
 comp_def_pattern = re.compile(r"(?P<comp_type>[RVI]) +(?P<comp_name>[\w\d]+){(?P<comp_params>([\w\d]+=[+-]?\d+(.\d*)?,? ?)*)}")
 comp_param_pattern = re.compile(r"(?P<param_name>[\w\d])+=(?P<param_value>[+-]?\d+(.\d*))")
 net_def_pattern = re.compile(r"(?P<net_name>[\w\d]+)?{([+-][\w\d]+,? ?)+}")
