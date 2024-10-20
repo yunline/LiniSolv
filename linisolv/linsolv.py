@@ -9,10 +9,87 @@ __all__ = [
     "LinearCircuitSolver"
 ]
 
+PRINT_COLOR_RED = "\033[31m"
+PRINT_COLOR_GREEN = "\033[32m"
+PRINT_COLOR_DEFAULT = "\033[39m"
+
+class UnknownVarible:
+    value: float|None = None
+    component:"Component"
+    param_name: str
+    reciprocal: bool = False
+    _rec:"UnknownVarible"
+    mat_index: int
+
+    def __init__(self, component:"Component", param_name:str):
+        self.component = component
+        self.param_name = param_name
+    
+    def get_reciprocal(self) -> "UnknownVarible":
+        if not hasattr(self,"_rec"):
+            self._rec = self.__class__.__new__(self.__class__)
+            self._rec.component = self.component
+            self._rec.param_name = self.param_name
+            self._rec.reciprocal = True
+            self._rec._rec = self
+        return self._rec
+
+    def __repr__(self):
+        if self.value is None:
+            return f"{PRINT_COLOR_RED}Unknown{PRINT_COLOR_DEFAULT}"
+        else:
+            return f"{PRINT_COLOR_GREEN}{float(self.value):.2f}{PRINT_COLOR_DEFAULT}"
+    
+    def __hash__(self) -> int:
+        return id(self)
+    
+    def get_expr(self) -> str:
+        if self.reciprocal:
+            return f"1/{self.get_reciprocal()}"
+        else:
+            return f"{self.param_name.upper()}{self.component.name}"
+
+class Equation:
+    unknowns: list[UnknownVarible]
+    coefficients: list[float]
+    const_term: float
+
+    def __init__(self):
+        self.unknowns = []
+        self.coefficients = []
+        self.const_term = 0
+
+    def add_unknown(self, unknown:UnknownVarible, coeff:float):
+        self.unknowns.append(unknown)
+        self.coefficients.append(coeff)
+    
+    def add_const(self, const:float):
+        self.const_term+=const
+
+    def __repr__(self):
+        terms = []
+        for unk,coff in zip(self.unknowns,self.coefficients):
+            if coff==1.0:
+                coff_str = '+'
+            elif coff==-1.0:
+                coff_str = '-'
+            elif coff<0:
+                coff_str = f"{coff:.2f}*"
+            else:
+                coff_str = f"+{coff:.2f}*"
+            terms.append(f'{coff_str}{unk.get_expr()}')
+        s = " ".join(terms)
+        if s[0]=="+":
+            s = s[1:]
+        return s+f" = {-self.const_term:.2f}"
+
 class Component:
     name: str
     mat_index: int
     _params: list
+
+    i: float|UnknownVarible
+    v: float|UnknownVarible
 
     class Terminal:
         component:"Component"
@@ -27,18 +104,20 @@ class Component:
             self.name = name
         else:
             self.name = f"{self.__class__.__name__}{id(self)}"
+        self._parse_param(params)
         self.positive_terminal = self.Terminal(self, +1)
         self.negative_terminal = self.Terminal(self, -1)
     
-    def _parse_param(self, params:dict[str,float], param_names:list[str]):
-        for name in param_names:
-            param = params.get(name)
-            if param is None:
-                continue
-            if type(param) is not float:
-                raise TypeError(f"Value of '{name}' is not a float")
+    def __init_subclass__(cls, params:list[str]) -> None:
+        cls._params = params
+    
+    def _parse_param(self, params:dict[str,float]):
+        for name in self._params:
+            param = params.get(name, UnknownVarible(self, name))
+            
+            if not isinstance(param, UnknownVarible):
+                param = float(param)
             setattr(self, name, param)
-        self._params = param_names
     
     def __repr__(self):
         l = [f"{name}={getattr(self,name)}" for name in self._params]
@@ -50,34 +129,23 @@ class Component:
     def __pos__(self):
         return self.positive_terminal
 
-class Resistor(Component):
-    r: float|None = None
-    i: float|None = None
-    v: float|None = None
-    def __init__(self, name:str|None=None, **params:float):
-        super().__init__(name, **params)
-        self._parse_param(params, ["r","i","v"])
+class Resistor(Component, params=["r","i","v"]):
+    r: float|UnknownVarible
     
-class VoltageSource(Component):
-    i: float|None = None
-    v: float|None = None
-    def __init__(self, name:str|None=None, **params:float):
-        super().__init__(name, **params)
-        self._parse_param(params, ["i","v"])
+class VoltageSource(Component, params=["i","v"]):
+    pass
 
-class CurrentSource(Component):
-    i: float|None = None
-    v: float|None = None
-    def __init__(self, name:str|None=None, **params:float):
-        super().__init__(name, **params)
-        self._parse_param(params, ["i","v"])
+class CurrentSource(Component, params=["i","v"]):
+    pass
 
 class LinearCircuitSolver:
     components: list[Component]
     kcl_mat:npt.NDArray[np.int8]
     kvl_mat:npt.NDArray[np.int8]
     net_list: list[list[Component.Terminal]]|None
+    equations: list[Equation]
     _jump_mat:npt.NDArray[np.uint16]
+
     def __init__(
             self, 
             components:list[Component],
@@ -182,9 +250,123 @@ class LinearCircuitSolver:
         # store the value
         self.kvl_mat = np.array(kvl_mat, dtype=np.int8)
 
-    def solve(self):
-        raise NotImplementedError()
+    def _generate_equations(self) -> None:
+        equations:list[Equation] = []
+        # get KCL equations
+        for line in self.kcl_mat:
+            eq = Equation()
+            equations.append(eq)
+            for comp_ind, comp in enumerate(self.components):
+                if line[comp_ind]==0:
+                    continue
+                if not isinstance(comp.i, UnknownVarible):
+                    eq.add_const(comp.i*line[comp_ind])
+                    continue
+                if isinstance(comp, VoltageSource):
+                    eq.add_unknown(comp.i, line[comp_ind])
+                elif isinstance(comp, Resistor):
+                    if (not isinstance(comp.r, UnknownVarible) and
+                        not isinstance(comp.v, UnknownVarible)):
+                        eq.add_const(line[comp_ind]*comp.v/comp.r)
+                    elif (not isinstance(comp.r, UnknownVarible) and
+                        isinstance(comp.v, UnknownVarible)):
+                        eq.add_unknown(comp.v, line[comp_ind]/comp.r)
+                    elif (isinstance(comp.r, UnknownVarible) and
+                        not isinstance(comp.v, UnknownVarible)):
+                        eq.add_unknown(comp.r.get_reciprocal(), line[comp_ind]*comp.v)
+                    else:
+                        raise RuntimeError("我不会，长大后再学习")
+                        eq.add_unknown(comp.i, line[comp_ind])
+        # get KVL equations
+        for line in self.kvl_mat:
+            eq = Equation()
+            equations.append(eq)
+            for comp_ind, comp in enumerate(self.components):
+                if line[comp_ind]==0:
+                    continue
+                if not isinstance(comp.v, UnknownVarible):
+                    eq.add_const(comp.v*line[comp_ind])
+                    continue
+                if isinstance(comp, VoltageSource):
+                    eq.add_unknown(comp.v, line[comp_ind])
+                elif isinstance(comp, Resistor):
+                    if (not isinstance(comp.r, UnknownVarible) and
+                        not isinstance(comp.i, UnknownVarible)):
+                        eq.add_const(comp.i*comp.r*line[comp_ind])
+                    elif (not isinstance(comp.r, UnknownVarible) and
+                        isinstance(comp.i, UnknownVarible)):
+                        eq.add_unknown(comp.i, comp.r*line[comp_ind])
+                    elif (isinstance(comp.r, UnknownVarible) and
+                        not isinstance(comp.i, UnknownVarible)):
+                        eq.add_unknown(comp.r, comp.i*line[comp_ind])
+                    else:
+                        raise RuntimeError("我不会，长大后再学习")
+                        eq.add_unknown(comp.v, line[comp_ind])
+        # get Ohm's Law qeuations
+        for comp in self.components:
+            if isinstance(comp, Resistor):
+                eq = Equation()
+                condition = isinstance(comp.r, UnknownVarible)+\
+                    isinstance(comp.v, UnknownVarible)+\
+                    isinstance(comp.i, UnknownVarible)
+                if condition==0:
+                    continue
+                elif condition==1:
+                    if isinstance(comp.r, UnknownVarible):
+                        eq.add_unknown(comp.r, 1) 
+                        eq.add_const(-comp.v/comp.i) # type: ignore
+                    elif isinstance(comp.v, UnknownVarible):
+                        eq.add_unknown(comp.v, 1) 
+                        eq.add_const(-comp.r*comp.i) # type: ignore
+                    elif isinstance(comp.i, UnknownVarible):
+                        eq.add_unknown(comp.i, 1)
+                        eq.add_const(-comp.v/comp.r) # type: ignore
+                elif condition==2:
+                    if not isinstance(comp.r, UnknownVarible):
+                        eq.add_unknown(comp.v, -1) # type: ignore
+                        eq.add_unknown(comp.i, comp.r) # type: ignore
+                    elif not isinstance(comp.i, UnknownVarible):
+                        eq.add_unknown(comp.v, -1) # type: ignore
+                        eq.add_unknown(comp.r, comp.i) # type: ignore
+                    elif not isinstance(comp.v, UnknownVarible):
+                        raise RuntimeError("我不会，长大后再学习")
+                elif condition==3:
+                    raise RuntimeError("我不会，长大后再学习")
+                if len(eq.unknowns)!=0:
+                    equations.append(eq)
 
-def is_parallel(a,b):
-    return not np.any(np.cross(a,b))
+        self.equations = equations
+    
+    def solve(self) -> None:
+        self._generate_equations()
+        # get all unknowns
+        unknowns_set:set[UnknownVarible] = set()
+        for eq in self.equations:
+            for unk in eq.unknowns:
+                unknowns_set.add(unk)
+        unknowns = list(unknowns_set)
+        # reset the value of unknowns
+        for ind,unk in enumerate(unknowns):
+            unk.value=None
+            unk.mat_index = ind
+        solver_mat = np.zeros((len(self.equations),len(unknowns)+1),dtype=np.float64)
+        for line,eq in enumerate(self.equations):
+            solver_mat[line,-1] = eq.const_term
+            for unk,coeff in zip(eq.unknowns, eq.coefficients):
+                solver_mat[line, unk.mat_index] = coeff
+        solver_mat = remove_linear_dependence(solver_mat)
+        result = np.linalg.solve(solver_mat[:,:-1], solver_mat[:,-1])
+        for res,unk in zip(result, unknowns):
+            unk.value = res
 
+def remove_linear_dependence(mat:npt.NDArray[np.float64])->npt.NDArray[np.float64]:
+    cnt = 0
+    selected_lines = []
+    for i in range(1,mat.shape[0]+1):
+        rnk = np.linalg.matrix_rank(mat[:i])
+        if rnk==cnt+1:
+            selected_lines.append(i-1)
+            cnt+=1
+        # rnk<cnt+1: the line shouldn't be selected
+        # rnk>cnt+1: this case will never happen
+    return mat[selected_lines]
