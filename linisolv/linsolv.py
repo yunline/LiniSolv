@@ -345,7 +345,7 @@ class LinearCircuitSolver:
             unk.mat_index = ind
         solver_mat = np.zeros((len(self.equations),len(unknowns)+1),dtype=np.float64)
         for line,eq in enumerate(self.equations):
-            solver_mat[line,-1] = eq.const_term
+            solver_mat[line,-1] = -eq.const_term
             for unk,coeff in zip(eq.unknowns, eq.coefficients):
                 solver_mat[line, unk.mat_index] = coeff
         solver_mat = remove_linear_dependence(solver_mat)
