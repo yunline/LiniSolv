@@ -4,8 +4,8 @@ import re
 from .linsolv import *
 
 component_token_to_type:dict[str, type[Component]] = {"R":Resistor, "S":Source}
-comp_def_pattern = re.compile(r"(?P<comp_type>[RVI]) +(?P<comp_name>[\w\d]+){(?P<comp_params>([\w\d]+=[+-]?\d+(.\d*)?,? ?)*)}")
-comp_param_pattern = re.compile(r"(?P<param_name>[\w\d])+=(?P<param_value>[+-]?\d+(.\d*))")
+comp_def_pattern = re.compile(r"(?P<comp_type>[RS]) +(?P<comp_name>[\w\d]+){(?P<comp_params>([\w\d]+ *= *[+-]?\d+(.\d*)?,? ?)*)}")
+comp_param_pattern = re.compile(r"(?P<param_name>[\w\d]+) *= *(?P<param_value>[+-]?\d+(.\d*)?)")
 net_def_pattern = re.compile(r"(?P<net_name>[\w\d]+)?{([+-][\w\d]+,? ?)+}")
 net_terminal_pattern = re.compile(r"(?P<pol>[+-])(?P<comp>[\w\d]+)")
 
