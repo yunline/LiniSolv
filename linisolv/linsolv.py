@@ -165,6 +165,7 @@ class LinearCircuitSolver:
     kvl_mat:npt.NDArray[np.int8]
     net_list: list[list[Component.Terminal]]|None
     equations: list[Equation]
+    valid_equation_indices: list[int]
     _jump_mat:npt.NDArray[np.uint16]
 
     def __init__(
@@ -354,7 +355,13 @@ class LinearCircuitSolver:
                 if len(eq.unknowns)!=0:
                     equations.append(eq)
 
-        self.equations = equations
+        self.equations = []
+        for eq in equations:
+            if len(eq.unknowns)!=0:
+                self.equations.append(eq)
+                continue
+            if eq.const_term!=0:
+                raise RuntimeError("The circuit is over constrained (conflict constraint)")
 
     def solve(self) -> None:
         self._generate_equations()
@@ -372,11 +379,17 @@ class LinearCircuitSolver:
             unk.mat_index = ind
         # build the solver mat
         solver_mat = np.zeros((len(self.equations),len(unknowns)+1),dtype=np.float64)
-        for line,eq in enumerate(self.equations):
-            solver_mat[line,-1] = -eq.const_term
+        for line_ind, eq in enumerate(self.equations):
+            solver_mat[line_ind, -1] = -eq.const_term
             for unk,coeff in zip(eq.unknowns, eq.coefficients):
-                solver_mat[line, unk.mat_index] = coeff
-        solver_mat = remove_linear_dependence(solver_mat)
+                solver_mat[line_ind, unk.mat_index] = coeff
+        self.valid_equation_indices = select_linear_independent_quations(solver_mat)
+        dof = len(unknowns)-len(self.valid_equation_indices)
+        if dof>0:
+            raise RuntimeError(f"The circuit is not fully constrained (DOF: {dof})")
+        elif dof<0:
+            raise RuntimeError(f"The circuit is over constrained (DOF: {dof})")
+        solver_mat = solver_mat[self.valid_equation_indices]
         # solve
         result = np.linalg.solve(solver_mat[:,:-1], solver_mat[:,-1])
         for res,unk in zip(result, unknowns):
@@ -387,14 +400,14 @@ class LinearCircuitSolver:
             if isinstance(unk.component,Resistor):
                 unk.component.autocomplete()
 
-def remove_linear_dependence(mat:npt.NDArray[np.float64])->npt.NDArray[np.float64]:
+def select_linear_independent_quations(mat:npt.NDArray[np.float64]) -> list[int]:
     cnt = 0
     selected_lines = []
-    for i in range(1,mat.shape[0]+1):
-        rnk = np.linalg.matrix_rank(mat[:i])
+    for i in range(0,mat.shape[0]):
+        rnk = np.linalg.matrix_rank(mat[:i+1])
         if rnk==cnt+1:
-            selected_lines.append(i-1)
+            selected_lines.append(i)
             cnt+=1
         # rnk<cnt+1: the line shouldn't be selected
         # rnk>cnt+1: this case will never happen
-    return mat[selected_lines]
+    return selected_lines
