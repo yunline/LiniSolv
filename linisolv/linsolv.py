@@ -87,7 +87,7 @@ class Equation:
         return s+f" = {-self.const_term:.2f}"
 
 class Component:
-    name: str|None
+    name: str
     mat_index: int
 
     _params: tuple[str, ...] = ("i", "v")
@@ -101,8 +101,12 @@ class Component:
             assert sign==1 or sign==-1
             self.sign=sign
             self.component=component
+        def __hash__(self) -> int:
+            return id(self)
 
     def __init__(self, name:str|None=None, **params):
+        if name is None:
+            name = object.__repr__(self)
         self.name = name
         self._parse_param(params)
         self.positive_terminal = self.Terminal(self, +1)
@@ -118,13 +122,12 @@ class Component:
     
     def __repr__(self):
         l = [f"{name}={getattr(self,name)}" for name in self._params]
-        name = f"{self.name}, " if self.name is not None else ''
-        return f"{self.__class__.__name__}({name}{', '.join(l)})"
+        return f"{self.__class__.__name__}({self.name}, {', '.join(l)})"
     
-    def __neg__(self):
+    def __neg__(self) -> Terminal:
         return self.negative_terminal
     
-    def __pos__(self):
+    def __pos__(self) -> Terminal:
         return self.positive_terminal
 
 class Source(Component):
@@ -163,7 +166,7 @@ class LinearCircuitSolver:
     components: list[Component]
     kcl_mat:npt.NDArray[np.int8]
     kvl_mat:npt.NDArray[np.int8]
-    net_list: list[list[Component.Terminal]]|None
+    net_list: list[set[Component.Terminal]]
     equations: list[Equation]
     valid_equation_indices: list[int]
     _jump_mat:npt.NDArray[np.uint16]
@@ -171,29 +174,64 @@ class LinearCircuitSolver:
     def __init__(
             self, 
             components:list[Component],
-            net_list: list[list[Component.Terminal]]|None = None,
-            *,
-            kcl_mat:npt.NDArray[np.int8]|None=None,
+            net_list: list[set[Component.Terminal]],
             ) -> None:
         self.components = components
         for mat_ind, comp in enumerate(self.components):
             comp.mat_index = mat_ind
-        if kcl_mat is not None:
-            self.net_list = None
-            self.kcl_mat = np.array(kcl_mat, dtype=np.int8)
-        elif net_list is not None:
-            self.net_list = net_list
-            self._generate_kcl_mat()
+        self.net_list = [set(i) for i in net_list]
+        self._generate_kcl_mat()
         self._generate_kvl_mat()
     
     def _generate_kcl_mat(self) -> None:
-        assert self.net_list is not None
         kcl_mat = np.zeros((len(self.net_list),len(self.components)), dtype=np.int8)
-        for line in range(kcl_mat.shape[0]):
-            for terminal in self.net_list[line]:
-                kcl_mat[line, terminal.component.mat_index] = terminal.sign
+        excs:list[Exception] = []
+        shorted_indices:list[int] = []
+
+        # build kcl mat
+        for line_ind in range(kcl_mat.shape[0]):
+            for terminal in self.net_list[line_ind]:
+                if terminal.component not in self.components:
+                    raise RuntimeError(
+                        f"Component '{terminal.component.name}' "
+                        "is not included in the component list"
+                    )
+                if kcl_mat[line_ind, terminal.component.mat_index]:
+                    shorted_indices.append(terminal.component.mat_index)
+                    excs.append(RuntimeError(f"Component '{terminal.component.name}' is shorted"))
+                kcl_mat[line_ind, terminal.component.mat_index] = terminal.sign
+        # verify kcl mat
+        abs_kcl_mat = np.abs(kcl_mat)
+        for line_ind,line_sum in enumerate(np.sum(np.abs(kcl_mat),axis=1)):
+            if line_sum==0:
+                excs.append(RuntimeError(f"Net[{line_ind}]: 0 terminals connected (expected >=2)"))
+            elif line_sum==1:
+                excs.append(RuntimeError(f"Net[{line_ind}]: Only 1 terminal connected (expected >=2)"))
+        mat_abs_sum = np.sum(abs_kcl_mat, axis=0)
+        mat_sum = np.sum(kcl_mat, axis=0)
+        if not (np.all(mat_abs_sum==2) and np.all(mat_sum==0)):
+            for col_ind in range(kcl_mat.shape[1]):
+                if col_ind in shorted_indices:
+                    continue # component is shorted, skip the check
+                comp_name = self.components[col_ind].name
+                if mat_abs_sum[col_ind]==0:
+                    excs.append(RuntimeError(f"Component '{comp_name}' is not connected to anything"))
+                elif mat_abs_sum[col_ind]==1:
+                    sign = '+' if mat_sum[col_ind]<0 else '-'
+                    excs.append(RuntimeError(f"Terminal '{sign}{comp_name}' is open circuit"))
+                elif mat_abs_sum[col_ind]==2:
+                    if mat_sum[col_ind]!=0:
+                        sign = '+' if mat_sum[col_ind]>0 else '-'
+                        excs.append(RuntimeError(
+                            f"Terminal '{sign}{comp_name}' is connected twice to different nets"))
+                else: # >2
+                    excs.append(RuntimeError(f"Component '{comp_name}' is connected to more than 2 nets"))
+        # raise if there is any exception
+        if excs:
+            raise ExceptionGroup("Invalid circuit",excs)        
+            
         self.kcl_mat =  kcl_mat
-    
+
     def _generate_jump_mat(self) -> None:
         nlines, ncolumns = self.kcl_mat.shape
         NO_CONNECTION = 0xffff
@@ -210,7 +248,6 @@ class LinearCircuitSolver:
 
     def _generate_kvl_mat(self) -> None:
         self._generate_jump_mat()
-        ncolumns = self.kcl_mat.shape[1]
 
         class StackElement:
             line:int
@@ -232,7 +269,7 @@ class LinearCircuitSolver:
 
         def get_candidates(line:int, excluded_column:int|None=None)->list[int]:
             candidates = []
-            for x in range(ncolumns):
+            for x in range(self.kcl_mat.shape[1]):
                 if self.kcl_mat[line, x]:
                     if excluded_column is not None and x==excluded_column:
                         continue
@@ -240,7 +277,7 @@ class LinearCircuitSolver:
             return candidates
 
         def add_loop(loop_origin: list[StackElement]):
-            kvl_mat_line = np.zeros((ncolumns,), dtype=np.int8)
+            kvl_mat_line = np.zeros((self.kcl_mat.shape[1],), dtype=np.int8)
             for ele in loop_origin:
                 kvl_mat_line[ele.column] = self.kcl_mat[ele.line, ele.column]
             for line in kvl_mat: # if the loop is in the mat, don't add it to mat
@@ -269,8 +306,10 @@ class LinearCircuitSolver:
             connecting_candidates = get_candidates(connecting_line, excluded_column=tos.column)
             stack.append(StackElement(connecting_line, connecting_candidates))
         
-        # store the value
+        # store the value and verify
         self.kvl_mat = np.array(kvl_mat, dtype=np.int8)
+        if not np.all(np.sum(np.abs(self.kvl_mat), axis=0)!=0):
+            raise RuntimeError("The graph is not connected or have cut-edge")
 
     def _generate_equations(self) -> None:
         equations:list[Equation] = []
