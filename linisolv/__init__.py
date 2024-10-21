@@ -7,4 +7,8 @@ __all__ = [
     "Source",
     "LinearCircuitSolver",
     "parse_circuit",
+    "LinisolvError",
+    "CircuitError",
+    "CircuitTopologyError",
+    "CircuitSolverError"
 ]

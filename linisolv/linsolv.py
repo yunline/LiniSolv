@@ -5,12 +5,32 @@ __all__ = [
     "Component",
     "Resistor",
     "Source",
-    "LinearCircuitSolver"
+    "LinearCircuitSolver",
+    "LinisolvError",
+    "CircuitError",
+    "CircuitTopologyError",
+    "CircuitSolverError"
 ]
 
 PRINT_COLOR_RED = "\033[31m"
 PRINT_COLOR_GREEN = "\033[32m"
 PRINT_COLOR_DEFAULT = "\033[39m"
+
+class LinisolvError(RuntimeError):
+    pass
+
+class CircuitError(LinisolvError):
+    pass
+
+class CircuitTopologyError(CircuitError):
+    disconnected_components:list["Component"]
+    def __init__(self,*args,disconnected_comps:list["Component"]|None=None,**kwargs) -> None:
+        if disconnected_comps is not None:
+            self.disconnected_comps=disconnected_comps
+        super().__init__(*args, **kwargs)
+
+class CircuitSolverError(LinisolvError):
+    pass
 
 class UnknownVarible:
     value: float|None = None
@@ -152,7 +172,7 @@ class Resistor(Component):
             return param
         condition = sum(check_unknown(name) for name in self._params)
         if condition<2:
-            raise RuntimeError("Too much unknowns, resistor autocompletion failed")
+            raise CircuitSolverError(f"Too much unknowns, resistor '{self.name}' autocompletion failed")
         if condition==3:
             return
         if not check_unknown('v'):
@@ -192,21 +212,21 @@ class LinearCircuitSolver:
         for line_ind in range(kcl_mat.shape[0]):
             for terminal in self.net_list[line_ind]:
                 if terminal.component not in self.components:
-                    raise RuntimeError(
+                    raise CircuitError(
                         f"Component '{terminal.component.name}' "
                         "is not included in the component list"
                     )
                 if kcl_mat[line_ind, terminal.component.mat_index]:
                     shorted_indices.append(terminal.component.mat_index)
-                    excs.append(RuntimeError(f"Component '{terminal.component.name}' is shorted"))
+                    excs.append(CircuitError(f"Component '{terminal.component.name}' is shorted"))
                 kcl_mat[line_ind, terminal.component.mat_index] = terminal.sign
         # verify kcl mat
         abs_kcl_mat = np.abs(kcl_mat)
         for line_ind,line_sum in enumerate(np.sum(np.abs(kcl_mat),axis=1)):
             if line_sum==0:
-                excs.append(RuntimeError(f"Net[{line_ind}]: 0 terminals connected (expected >=2)"))
+                excs.append(CircuitError(f"Net[{line_ind}]: 0 terminals connected (expected >=2)"))
             elif line_sum==1:
-                excs.append(RuntimeError(f"Net[{line_ind}]: Only 1 terminal connected (expected >=2)"))
+                excs.append(CircuitError(f"Net[{line_ind}]: Only 1 terminal connected (expected >=2)"))
         mat_abs_sum = np.sum(abs_kcl_mat, axis=0)
         mat_sum = np.sum(kcl_mat, axis=0)
         if not (np.all(mat_abs_sum==2) and np.all(mat_sum==0)):
@@ -215,17 +235,17 @@ class LinearCircuitSolver:
                     continue # component is shorted, skip the check
                 comp_name = self.components[col_ind].name
                 if mat_abs_sum[col_ind]==0:
-                    excs.append(RuntimeError(f"Component '{comp_name}' is not connected to anything"))
+                    excs.append(CircuitError(f"Component '{comp_name}' is not connected to anything"))
                 elif mat_abs_sum[col_ind]==1:
                     sign = '+' if mat_sum[col_ind]<0 else '-'
-                    excs.append(RuntimeError(f"Terminal '{sign}{comp_name}' is open circuit"))
+                    excs.append(CircuitError(f"Terminal '{sign}{comp_name}' is open circuit"))
                 elif mat_abs_sum[col_ind]==2:
                     if mat_sum[col_ind]!=0:
                         sign = '+' if mat_sum[col_ind]>0 else '-'
-                        excs.append(RuntimeError(
+                        excs.append(CircuitError(
                             f"Terminal '{sign}{comp_name}' is connected twice to different nets"))
                 else: # >2
-                    excs.append(RuntimeError(f"Component '{comp_name}' is connected to more than 2 nets"))
+                    excs.append(CircuitError(f"Component '{comp_name}' is connected to more than 2 nets"))
         # raise if there is any exception
         if excs:
             raise ExceptionGroup("Invalid circuit",excs)        
@@ -308,8 +328,17 @@ class LinearCircuitSolver:
         
         # store the value and verify
         self.kvl_mat = np.array(kvl_mat, dtype=np.int8)
-        if not np.all(np.sum(np.abs(self.kvl_mat), axis=0)!=0):
-            raise RuntimeError("The graph is not connected or have cut-edge")
+        mat_abs_sum = np.sum(np.abs(self.kvl_mat), axis=0)
+        if not np.all(mat_abs_sum!=0):
+            disconnected = []
+            for col_ind in range(self.kvl_mat.shape[1]):
+                if mat_abs_sum[col_ind]==0:
+                    disconnected.append(self.components[col_ind])
+            raise CircuitTopologyError(
+                f"Component is disconnected or on cut-edge\n"
+                f"Disconnected/cut-edge component(s): {[i.name for i in disconnected]}",
+                disconnected_comps=disconnected,
+            )
 
     def _generate_equations(self) -> None:
         equations:list[Equation] = []
@@ -400,7 +429,7 @@ class LinearCircuitSolver:
                 self.equations.append(eq)
                 continue
             if eq.const_term!=0:
-                raise RuntimeError("The circuit is over constrained (conflict constraint)")
+                raise CircuitSolverError("The circuit is over constrained (conflict constraint)")
 
     def solve(self) -> None:
         self._generate_equations()
@@ -425,9 +454,9 @@ class LinearCircuitSolver:
         self.valid_equation_indices = select_linear_independent_quations(solver_mat)
         dof = len(unknowns)-len(self.valid_equation_indices)
         if dof>0:
-            raise RuntimeError(f"The circuit is not fully constrained (DOF: {dof})")
+            raise CircuitSolverError(f"The circuit is not fully constrained (DOF: {dof})")
         elif dof<0:
-            raise RuntimeError(f"The circuit is over constrained (DOF: {dof})")
+            raise CircuitSolverError(f"The circuit is over constrained (DOF: {dof})")
         solver_mat = solver_mat[self.valid_equation_indices]
         # solve
         result = np.linalg.solve(solver_mat[:,:-1], solver_mat[:,-1])
