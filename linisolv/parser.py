@@ -4,9 +4,22 @@ import re
 from .linsolv import *
 
 component_token_to_type:dict[str, type[Component]] = {"R":Resistor, "S":Source}
-comp_def_pattern = re.compile(r"(?P<comp_type>[RS]) +(?P<comp_name>[\w\d]+){(?P<comp_params>([\w\d]+ *= *[+-]?\d+(.\d*)?,? ?)*)}")
-comp_param_pattern = re.compile(r"(?P<param_name>[\w\d]+) *= *(?P<param_value>[+-]?\d+(.\d*)?)")
-net_def_pattern = re.compile(r"(?P<net_name>[\w\d]+)?{([+-][\w\d]+,? ?)+}")
+comp_def_pattern = re.compile(
+    r"(?P<comp_type>[RS])\s+"
+    r"(?P<comp_name>[\w\d]+){"
+        r"(?P<comp_params>"
+            r"([\w\d]+\s*=\s*[+-]?\d+(\.\d*)?\s*,\s*)*"
+            r"([\w\d]+\s*=\s*[+-]?\d+(\.\d*)?\s*,?\s*)?"
+        r")"
+    r"}"
+)
+comp_param_pattern = re.compile(r"(?P<param_name>[\w\d]+)\s*=\s*(?P<param_value>[+-]?\d+(\.\d*)?)")
+net_def_pattern = re.compile(
+    r"(?P<net_name>[\w\d]+)?{"
+        r"([+-][\w\d]+\s*,\s*)+"
+        r"([+-][\w\d]+\s*,?\s*)?"
+    r"}"
+)
 net_terminal_pattern = re.compile(r"(?P<pol>[+-])(?P<comp>[\w\d]+)")
 
 def parse_circuit(stream:io.TextIOBase) -> LinearCircuitSolver:
