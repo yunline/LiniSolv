@@ -1,3 +1,2 @@
 # LiniSolv
-An Linear Electrical Circuit Constraint Solver
-
+A Linear Electrical Circuit Constraint Solver
