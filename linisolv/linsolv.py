@@ -111,6 +111,38 @@ def _get_coefficient_value(coeff: Coefficient):
             value*=float(v)
     return value
 
+def get_term_expr(term: list[float|Varible])->tuple[float,str]:
+    coeff = 1.0
+    vars:list[Varible] = []
+    for v in term:
+        if isinstance(v, Varible):
+            vars.append(v)
+        else:
+            coeff*=float(v)
+    sorted_vars = sorted(vars, key=lambda v:v.reciprocal)
+    is_first = True
+    first_reciprocal = False
+    expr_list:list[str] = []
+    for v in sorted_vars:
+        _expr = f"{v.param_name.upper()}_{v.component.name}"
+        if is_first:
+            expr_list.append(_expr)
+            first_reciprocal = v.reciprocal
+            is_first = False
+            continue
+        if v.reciprocal:
+            expr_list.append("/"+_expr)
+        else:
+            expr_list.append("*"+_expr)
+    expr_str = "".join(expr_list)
+    if abs(coeff)!=1.0:
+        if first_reciprocal:
+            expr_str = "/" + expr_str
+        expr_str = f"{abs(coeff):.1f}" + expr_str
+    elif first_reciprocal:
+        expr_str = f"1/" + expr_str
+    return (1.0 if coeff>0 else -1.0), expr_str
+
 class Equation:
     unknowns: list[UnknownVarible]
     coefficients: list[Coefficient]
@@ -133,6 +165,39 @@ class Equation:
     
     def get_coefficient_values(self) -> list[float]:
         return [_get_coefficient_value(coeff) for coeff in self.coefficients]
+    
+    def get_expr(self):
+        left = []
+        is_first_term = True
+        for unknwon, coeff in zip(self.unknowns, self.coefficients):
+            sign, term_expr = get_term_expr([*coeff, unknwon])
+            if is_first_term:
+                if sign>0:
+                    left.append(term_expr)
+                else:
+                    left.append("-"+term_expr)
+                is_first_term = False
+            else:
+                left.append((" + " if sign>0 else " - ") + term_expr)
+        left_str = "".join(left)
+        right = []
+        is_first_term = True
+        for const_term in self.const_terms:
+            sign, term_expr = get_term_expr(const_term)
+            if is_first_term:
+                if sign>0:
+                    right.append(term_expr)
+                else:
+                    right.append("-"+term_expr)
+                is_first_term = False
+            else:
+                right.append((" + " if sign>0 else " - ") + term_expr)
+        if len(right)==0:
+            rigth_str = "0.0"
+        else:
+            rigth_str = "".join(right)
+        
+        return left_str + " = " + rigth_str
 
 class Component:
     name: str
