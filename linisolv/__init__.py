@@ -17,5 +17,5 @@ __all__ = [
     "LinisolvError",
     "CircuitError",
     "CircuitTopologyError",
-    "CircuitSolverError"
+    "CircuitSolverError",
 ]

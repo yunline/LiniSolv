@@ -11,12 +11,30 @@ __all__ = [
     "LinisolvError",
     "CircuitError",
     "CircuitTopologyError",
-    "CircuitSolverError"
+    "CircuitSolverError",
+    "set_print_config",
 ]
 
 PRINT_COLOR_RED = "\033[31m"
 PRINT_COLOR_GREEN = "\033[32m"
 PRINT_COLOR_DEFAULT = "\033[39m"
+FLOAT_PRINT_FORMAT_STR = ""
+
+def set_print_config(enabele_colorful_print:bool|None=None, float_format:str|None=None) -> None:
+    if float_format is not None:
+        global FLOAT_PRINT_FORMAT_STR 
+        FLOAT_PRINT_FORMAT_STR = float_format
+    
+    if enabele_colorful_print is not None:
+        global PRINT_COLOR_RED, PRINT_COLOR_GREEN, PRINT_COLOR_DEFAULT
+        if enabele_colorful_print:
+            PRINT_COLOR_RED = "\033[31m"
+            PRINT_COLOR_GREEN = "\033[32m"
+            PRINT_COLOR_DEFAULT = "\033[39m"
+        else:
+            PRINT_COLOR_RED = ""
+            PRINT_COLOR_GREEN = ""
+            PRINT_COLOR_DEFAULT = ""
 
 class LinisolvError(RuntimeError):
     pass
@@ -64,12 +82,6 @@ class Varible:
 
 class UnknownVarible(Varible):
     computed_value: float|None = None
-
-    def __repr__(self):
-        if self.computed_value is None:
-            return f"{PRINT_COLOR_RED}Unknown{PRINT_COLOR_DEFAULT}"
-        else:
-            return f"{PRINT_COLOR_GREEN}{float(self.computed_value):.2f}{PRINT_COLOR_DEFAULT}"
     
     def reset(self):
         self.computed_value = None
@@ -84,9 +96,6 @@ class UnknownVarible(Varible):
 
 class ConstrainedVarible(Varible):
     constraint_value: float
-
-    def __repr__(self):
-            return f"{float(self.constraint_value):.2f}"
 
     def __init__(self, component:"Component", param_name:str, constraint_value:float):
         super().__init__(component, param_name)
@@ -103,7 +112,7 @@ class ConstrainedVarible(Varible):
 
 Coefficient = list[float|ConstrainedVarible]
 
-def _get_coefficient_value(coeff: Coefficient):
+def get_coefficient_value(coeff: Coefficient):
     value = 1.0
     for v in coeff:
         if isinstance(v, ConstrainedVarible):
@@ -139,7 +148,7 @@ def get_term_expr(term: list[float|Varible])->tuple[float,str]:
     if abs(coeff)!=1.0:
         if first_reciprocal:
             expr_str = "/" + expr_str
-        expr_str = f"{abs(coeff):.1f}" + expr_str
+        expr_str = f"{abs(coeff)}" + expr_str
     elif first_reciprocal:
         expr_str = f"1/" + expr_str
     return (1.0 if coeff>0 else -1.0), expr_str
@@ -162,10 +171,10 @@ class Equation:
         self.const_terms.append(const)
 
     def get_const_term_value(self) -> float:
-        return sum(_get_coefficient_value(coeff) for coeff in self.const_terms)
+        return sum(get_coefficient_value(coeff) for coeff in self.const_terms)
     
     def get_coefficient_values(self) -> list[float]:
-        return [_get_coefficient_value(coeff) for coeff in self.coefficients]
+        return [get_coefficient_value(coeff) for coeff in self.coefficients]
     
     def get_expr(self):
         left = []
@@ -204,7 +213,7 @@ class Component:
     name: str
     mat_index: int
 
-    _params: tuple[str, ...] = ("i", "v")
+    _params: tuple[str, ...] = ("v", "i")
     i: Varible
     v: Varible
 
@@ -234,8 +243,22 @@ class Component:
             setattr(self, name, param)
     
     def __repr__(self):
-        l = [f"{name}={getattr(self,name)}" for name in self._params]
-        return f"{self.__class__.__name__}({self.name}, {', '.join(l)})"
+        param_strs = []
+        for name in self._params:
+            param = getattr(self,name)
+            if isinstance(param, UnknownVarible):
+                if param.computed_value is None:
+                    param_value_str = f"{PRINT_COLOR_RED}Unknown{PRINT_COLOR_DEFAULT}"
+                else:
+                    param_value_str = (
+                        f"{PRINT_COLOR_GREEN}"
+                        f"{format(param.computed_value, FLOAT_PRINT_FORMAT_STR)}"
+                        f"{PRINT_COLOR_DEFAULT}"
+                    )
+            elif isinstance(param, ConstrainedVarible):
+                param_value_str = format(param.constraint_value, FLOAT_PRINT_FORMAT_STR)
+            param_strs.append(f"{name}={param_value_str}")
+        return f"{self.__class__.__name__}({self.name}, {', '.join(param_strs)})"
     
     def __neg__(self) -> Terminal:
         return self.negative_terminal
@@ -247,7 +270,7 @@ class Source(Component):
     pass
 
 class Resistor(Component):
-    _params = ("i", "v", "r")
+    _params = ("v", "i", "r")
     r: Varible
     def autocomplete(self) -> None:
         def is_unknown(param_name:str) -> bool:
@@ -420,7 +443,7 @@ class LinearCircuitSolver:
         self.kvl_mat = np.array(kvl_mat, dtype=np.int8)
         mat_abs_sum = np.sum(np.abs(self.kvl_mat), axis=0)
         if not np.all(mat_abs_sum!=0):
-            disconnected = []
+            disconnected: list[Component] = []
             for col_ind in range(self.kvl_mat.shape[1]):
                 if mat_abs_sum[col_ind]==0:
                     disconnected.append(self.components[col_ind])
@@ -495,13 +518,13 @@ class LinearCircuitSolver:
             )
             if unknown_state==(True, False, False):
                 eq.add_unknown(comp.r, [1.0]) # type: ignore
-                eq.add_const([-1, comp.v, comp.i.get_reciprocal()]) # type: ignore
+                eq.add_const([-1.0, comp.v, comp.i.get_reciprocal()]) # type: ignore
             elif unknown_state==(False, True, False):
                 eq.add_unknown(comp.v, [1.0])  # type: ignore
-                eq.add_const([-1, comp.r, comp.i]) # type: ignore
+                eq.add_const([-1.0, comp.r, comp.i]) # type: ignore
             elif unknown_state==(False, False, True):
                 eq.add_unknown(comp.i, [1.0]) # type: ignore
-                eq.add_const([-1, comp.v, comp.r.get_reciprocal()]) # type: ignore
+                eq.add_const([-1.0, comp.v, comp.r.get_reciprocal()]) # type: ignore
             elif unknown_state==(False, True, True):
                 eq.add_unknown(comp.v, [-1.0]) # type: ignore
                 eq.add_unknown(comp.i, [comp.r]) # type: ignore
