@@ -1,6 +1,7 @@
 import numpy as np
 import numpy.typing as npt
 import typing
+import dataclasses
 
 __all__ = [
     "Component",
@@ -207,13 +208,10 @@ class Component:
     i: Varible
     v: Varible
 
+    @dataclasses.dataclass
     class Terminal:
         component:"Component"
-        sign: int
-        def __init__(self, component:"Component", sign:int):
-            assert sign==1 or sign==-1
-            self.sign=sign
-            self.component=component
+        sign: typing.Literal[+1, -1]
         def __hash__(self) -> int:
             return id(self)
 
@@ -361,13 +359,13 @@ class LinearCircuitSolver:
     def _generate_kvl_mat(self) -> None:
         self._generate_jump_mat()
 
+        @dataclasses.dataclass
         class StackElement:
             line:int
             candidates:list[int]
-            column:int
-            def __init__(self,line:int,candidates:list[int]):
-                self.line = line
-                self.candidates = candidates
+            # set the default value of column to a invalid value
+            # to prevent use-before-init
+            column:int = self._jump_mat.shape[1] + 1
         
         stack: list[StackElement] = []
         kvl_mat: list[npt.NDArray[np.int8]] = []
